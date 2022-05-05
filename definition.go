@@ -23,6 +23,7 @@ type Verification struct {
 
 type Signature struct {
 	verifier *Verifier
+	message  *Message
 
 	raw    string
 	tagMap TagMap
@@ -62,8 +63,14 @@ func NewSignature(item Header) *Signature {
 	return &Signature{tagMap: tm, raw: item.Raw}
 }
 
-func (s *Signature) SetVerifier(vfr *Verifier) {
+func (s *Signature) SetVerifier(vfr *Verifier) *Signature {
 	s.verifier = vfr
+	return s
+}
+
+func (s *Signature) SetMessage(msg *Message) *Signature {
+	s.message = msg
+	return s
 }
 
 func (s *Signature) GetTagMap() TagMap {

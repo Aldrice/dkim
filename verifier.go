@@ -20,17 +20,8 @@ import (
 const verifierPrefix = "DKIM"
 const defaultDKIMTimeout = time.Second * 10
 
-func NewVerifier(r io.Reader) (*Verifier, error) {
-	// todo: 实现Verifier和某个邮件实体的解耦
-	br := bufio.NewReader(r)
-	hm, err := AbstractHeader(br)
-	if err != nil {
-		return nil, err
-	}
-
-	v := &Verifier{
-		content:         br,
-		headersMap:      hm,
+func NewVerifier() (*Verifier, error) {
+	return &Verifier{
 		hashMap:         algorithm.DefaultHashMap,
 		encryptionMap:   algorithm.DefaultEncryptionMap,
 		canonicalizeMap: algorithm.DefaultCanonicalizeAlgorithm,
@@ -41,19 +32,12 @@ func NewVerifier(r io.Reader) (*Verifier, error) {
 		timeout: defaultDKIMTimeout,
 
 		tagVerifiersList: defaultTagExtractorList,
-	}
-
-	return v, nil
+	}, nil
 }
 
 // Verifier for DKIM Version 1
 // todo: add setter
 type Verifier struct {
-	// email content
-	content    *bufio.Reader
-	headersMap HeaderMap
-	signatures []*Signature
-
 	// algorithms map
 	hashMap         map[string]algorithm.HashAlgorithm
 	encryptionMap   map[string]algorithm.EncryptAlgorithm
@@ -77,21 +61,59 @@ func (v *Verifier) SetResolver(r *net.Resolver) {
 	v.fetcher.SetResolver(r)
 }
 
+type Message struct {
+	content    *bufio.Reader
+	headersMap HeaderMap
+	signatures []*Signature
+}
+
+func NewMessage(v *Verifier, r io.Reader) (*Message, error) {
+	br := bufio.NewReader(r)
+	hm, err := AbstractHeader(br)
+	if err != nil {
+		return nil, err
+	}
+
+	m := &Message{
+		content:    br,
+		headersMap: hm,
+	}
+
+	sigs, ok := m.headersMap[strings.ToLower(SignatureKey)]
+	if len(sigs) > 0 {
+		m.signatures = make([]*Signature, len(sigs))
+		if ok {
+			for i, h := range sigs {
+				m.signatures[i] = NewSignature(h).SetVerifier(v).SetMessage(m)
+			}
+		}
+	} else {
+		m.signatures = []*Signature{}
+	}
+
+	return m, nil
+}
+
 // VerificationGenerator used to generate verification header to store verify result
 // Ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6
 type VerificationGenerator struct {
 }
 
-func (v *Verifier) Validate(ctx context.Context) ([]*Signature, error) {
+func (v *Verifier) Validate(ctx context.Context, r io.Reader) ([]*Signature, error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout)
 	v.ctx = ctx
 	defer cancel()
 
-	sigs := v.extractSignatures()
-	if len(sigs) == 0 {
-		return sigs, nil
+	// todo: wrap the error
+	msg, err := NewMessage(v, r)
+	if err != nil {
+		return nil, err
 	}
-	for _, s := range sigs {
+
+	if len(msg.signatures) == 0 {
+		return msg.signatures, nil
+	}
+	for _, s := range msg.signatures {
 		if err := v.extractTags(s); err != nil {
 			s.verification = generateVerification(err)
 			if s.verification.status == StatusPermFail {
@@ -115,7 +137,7 @@ func (v *Verifier) Validate(ctx context.Context) ([]*Signature, error) {
 
 		// todo: generate verification for each signature
 	}
-	return v.signatures, nil
+	return msg.signatures, nil
 }
 
 func generateVerification(err error) Verification {
@@ -130,19 +152,6 @@ const (
 	FromKey      = "From"
 	SignatureKey = "DKIM-Signature"
 )
-
-// extractSignatures abstract DKIM signature from email content
-func (v *Verifier) extractSignatures() []*Signature {
-	sigs, ok := v.headersMap[strings.ToLower(SignatureKey)]
-	signatures := make([]*Signature, len(sigs))
-	if ok {
-		for i, h := range sigs {
-			signatures[i] = NewSignature(h)
-			signatures[i].SetVerifier(v)
-		}
-	}
-	return signatures
-}
 
 func (v *Verifier) extractTags(s *Signature) error {
 	for _, vfr := range v.tagVerifiersList {
@@ -226,7 +235,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	}
 	wc := s.body.CanonicalizeBody(w)
 	// todo: may take this error as temp fail
-	if _, err := io.Copy(wc, v.content); err != nil {
+	if _, err := io.Copy(wc, s.message.content); err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when input the content")
 	}
 	if err := wc.Close(); err != nil {
@@ -243,7 +252,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	// compute the hash and validate the signature
 	hr.Reset()
 	for _, h := range s.declaredHeaders {
-		h, ok := v.headersMap[strings.ToLower(h)]
+		h, ok := s.message.headersMap[strings.ToLower(h)]
 		if !ok {
 			continue
 		}

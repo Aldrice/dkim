@@ -45,12 +45,12 @@ func TestNewVerifier(t *testing.T) {
 			if err != nil {
 				return
 			}
-			v, err := NewVerifier(bytes.NewReader(content))
+			v, err := NewVerifier()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("failed to get verifier")
 				return
 			}
-			_, err = v.Validate(context.Background())
+			_, err = v.Validate(context.Background(), bytes.NewReader(content))
 			if err != nil {
 				t.Errorf("failed to validate signatures")
 				return
