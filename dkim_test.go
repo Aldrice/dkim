@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTrimSpace(t *testing.T) {
@@ -50,7 +51,7 @@ func TestNewVerifier(t *testing.T) {
 				t.Errorf("failed to get verifier")
 				return
 			}
-			_, err = v.Validate(context.Background(), bytes.NewReader(content))
+			_, err = v.Validate(context.Background(), bytes.NewReader(content), time.Now())
 			if err != nil {
 				t.Errorf("failed to validate signatures")
 				return

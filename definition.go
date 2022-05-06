@@ -5,7 +5,9 @@ import (
 	. "dkim/utils"
 	"errors"
 	"net/mail"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Status string
@@ -17,7 +19,21 @@ const (
 
 // Verification todo: 完善相关细节, 参考go-dkim
 type Verification struct {
-	status  Status
+	// The SDID claiming responsibility for an introduction of a message into the
+	// mail stream.
+	Domain string
+	// The Agent or User Identifier (AUID) on behalf of which the SDID is taking
+	// responsibility.
+	Identifier string
+
+	// The time that this signature was created. If unknown, it's set to zero.
+	Time time.Time
+	// The expiration time. If the signature doesn't expire, it's set to zero.
+	Expiration time.Time
+
+	// storing the status of verification
+	status Status
+	// message storing the fail reason if status is not empty
 	message string
 }
 
@@ -28,9 +44,12 @@ type Signature struct {
 	raw    string
 	tagMap TagMap
 
-	identity        string
+	identifier      string
 	domain          string
+	signedAt        time.Time
+	expiredAt       time.Time
 	declaredHeaders []string
+	copiedHeaders   []string
 	queryMethod     []string
 	bodyCipher      string
 	bodyHash        string
@@ -44,6 +63,7 @@ type Signature struct {
 	header algorithm.CanonicalizeAlgorithm
 	body   algorithm.CanonicalizeAlgorithm
 
+	// todo: verification would be generate with the info of signature itself
 	verification Verification
 }
 
@@ -77,8 +97,8 @@ func (s *Signature) GetTagMap() TagMap {
 	return s.tagMap
 }
 
-func (s *Signature) SetVerification(sts Verification) {
-	s.verification = sts
+func (s *Signature) SetVerification(vfc Verification) {
+	s.verification = vfc
 }
 
 var defaultTagExtractorList = []TagExtractor{
@@ -93,6 +113,9 @@ var defaultTagExtractorList = []TagExtractor{
 	new(SelectorTagExtractor),
 	new(LengthTagExtractor),
 	new(QueryMethodTagExtractor),
+	new(SignedAtTagExtractor),
+	new(ExpiredAtTagExtractor),
+	new(CopiedTagExtractor),
 }
 
 type TagExtractor interface {
@@ -172,14 +195,14 @@ func (d DomainTagExtractor) Extract(s *Signature, content string) error {
 		return NewSyntaxError(errors.New("invalid domain format"))
 	}
 	s.domain = content
-	if s.identity != "" {
-		// todo: s.identity may be equal or the subdomain of content
-		items := strings.SplitN(s.identity, "@", 2)
+	if s.identifier != "" {
+		// todo: s.identifier may be equal or the subdomain of content
+		items := strings.SplitN(s.identifier, "@", 2)
 		if !strings.HasSuffix(items[1], content) {
 			return NewSyntaxError(errors.New("domain mismatch"))
 		}
 	} else {
-		s.identity = "@" + content
+		s.identifier = "@" + content
 	}
 	return nil
 }
@@ -195,14 +218,14 @@ func (i IdentityTagExtractor) IsRequired(_ *Signature) bool {
 }
 
 // Extract
-// The syntax of identity is a standard email address where the local-part MAY be omitted.
+// The syntax of identifier is a standard email address where the local-part MAY be omitted.
 func (i IdentityTagExtractor) Extract(s *Signature, content string) error {
 	items := strings.SplitN(content, "@", 2)
 	if len(items) != 2 {
-		return NewSyntaxError(errors.New("invalid syntax of identity"))
+		return NewSyntaxError(errors.New("invalid syntax of identifier"))
 	}
 
-	// verify the whole identity if the local-domain wasn't omitted
+	// verify the whole identifier if the local-domain wasn't omitted
 	// otherwise only verify the domain part
 	if items[0] != "" {
 		_, err := mail.ParseAddress(content)
@@ -211,19 +234,20 @@ func (i IdentityTagExtractor) Extract(s *Signature, content string) error {
 		}
 	}
 
-	if s.identity != "" {
+	// todo: temporary solution, complete design definition see: https://datatracker.ietf.org/doc/html/rfc6376#page-21
+	if s.identifier != "" {
 		d := items[1]
 		if !DomainRegexp.MatchString(d) {
-			return NewSyntaxError(errors.New("invalid syntax of identity"))
+			return NewSyntaxError(errors.New("invalid syntax of identifier"))
 		}
-		temp := strings.TrimLeft(s.identity, "@")
+		temp := strings.TrimLeft(s.identifier, "@")
 		if !strings.HasSuffix(d, temp) {
 			return NewSyntaxError(
 				errors.New("domain mismatch"),
 			)
 		}
 	}
-	s.identity = content
+	s.identifier = content
 	return nil
 }
 
@@ -371,7 +395,7 @@ func (l LengthTagExtractor) IsRequired(s *Signature) bool {
 }
 
 func (l LengthTagExtractor) Extract(s *Signature, content string) error {
-	//TODO implement me
+	//TODO implement length tag extractor
 	return nil
 }
 
@@ -395,4 +419,86 @@ func (q QueryMethodTagExtractor) Extract(s *Signature, content string) error {
 	return nil
 }
 
-// todo: t, x, z
+type SignedAtTagExtractor struct{}
+
+func (st SignedAtTagExtractor) Name() string {
+	return "t"
+}
+
+func (st SignedAtTagExtractor) IsRequired(s *Signature) bool {
+	s.signedAt = time.Time{}
+	return false
+}
+
+func (st SignedAtTagExtractor) Extract(s *Signature, content string) error {
+	t, err := parseTimestamp(content)
+	if err != nil {
+		return WrapError(err, StatusPermFail, "error occurred when parsing the timestamp")
+	}
+	if t.After(time.Now()) {
+		return NewDkimError(StatusPermFail, "invalid timestamp, declared timestamp is in the future")
+	}
+	if !s.expiredAt.IsZero() && t.After(s.expiredAt) {
+		return NewDkimError(StatusPermFail, "invalid timestamp, signed time after the expired time")
+	}
+	s.signedAt = t
+	return nil
+}
+
+type ExpiredAtTagExtractor struct{}
+
+func (e ExpiredAtTagExtractor) Name() string {
+	return "x"
+}
+
+func (e ExpiredAtTagExtractor) IsRequired(s *Signature) bool {
+	s.expiredAt = time.Time{}
+	return false
+}
+
+func (e ExpiredAtTagExtractor) Extract(s *Signature, content string) error {
+	t, err := parseTimestamp(content)
+	if err != nil {
+		return WrapError(err, StatusPermFail, "error occurred when parsing the timestamp")
+	}
+	// The value of the "x=" tag MUST be greater than the value of the "t=" tag if both are present.
+	// ref: https://datatracker.ietf.org/doc/html/rfc6376#page-24
+	if !s.signedAt.IsZero() && s.signedAt.After(t) {
+		return NewDkimError(StatusPermFail, "invalid timestamp, signed time after the expired time")
+	}
+	if s.message.receiveTime.After(t) {
+		return NewDkimError(StatusPermFail, "signature expired")
+	}
+	s.expiredAt = t
+	return nil
+}
+
+type CopiedTagExtractor struct{}
+
+func (c CopiedTagExtractor) Name() string {
+	return "z"
+}
+
+func (c CopiedTagExtractor) IsRequired(_ *Signature) bool {
+	return false
+}
+
+func (c CopiedTagExtractor) Extract(s *Signature, content string) error {
+	s.copiedHeaders = strings.Split(StripWhitespace(content), "|")
+	return nil
+}
+
+func parseTimestamp(raw string) (time.Time, error) {
+	et := time.Time{}
+	// according to rfc document, implementation should be prepared to handle values up to 10^12(12 digits)
+	// any timestamp longer than 12 digits would be taken as infinite in order to avoid denial-of-service attacks
+	// ref: https://datatracker.ietf.org/doc/html/rfc6376#page-24
+	if len(raw) > 12 {
+		return et, errors.New("number digit more than 12")
+	}
+	ts, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return et, errors.New("invalid timestamp syntax")
+	}
+	return time.Unix(ts, 0), nil
+}

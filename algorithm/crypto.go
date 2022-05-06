@@ -23,7 +23,8 @@ var defaultEncryptionList = []EncryptAlgorithm{
 
 type EncryptAlgorithm interface {
 	Name() string
-	Init(pk []byte) (EncryptAlgorithm, error)
+	NewEncryptionVerifier(pk []byte) (EncryptAlgorithm, error)
+	IsEmpty() bool
 	Verify(sig, hashed []byte, hash crypto.Hash) error
 }
 
@@ -31,7 +32,11 @@ type RSAVerifier struct {
 	*rsa.PublicKey
 }
 
-func (r RSAVerifier) Init(pk []byte) (EncryptAlgorithm, error) {
+func (r RSAVerifier) IsEmpty() bool {
+	return r.PublicKey != nil
+}
+
+func (r RSAVerifier) NewEncryptionVerifier(pk []byte) (EncryptAlgorithm, error) {
 	pub, err := x509.ParsePKIXPublicKey(pk)
 	if err != nil {
 		return nil, err

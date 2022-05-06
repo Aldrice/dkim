@@ -10,6 +10,7 @@ import (
 	. "dkim/utils"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"regexp"
@@ -19,6 +20,41 @@ import (
 
 const verifierPrefix = "DKIM"
 const defaultDKIMTimeout = time.Second * 10
+
+type Message struct {
+	receiveTime time.Time
+	content     *bufio.Reader
+	headersMap  HeaderMap
+	signatures  []*Signature
+}
+
+func NewMessage(v *Verifier, r io.Reader, rt time.Time) (*Message, error) {
+	br := bufio.NewReader(r)
+	hm, err := AbstractHeader(br)
+	if err != nil {
+		return nil, err
+	}
+
+	m := &Message{
+		receiveTime: rt,
+		content:     br,
+		headersMap:  hm,
+	}
+
+	sigs, ok := m.headersMap[strings.ToLower(SignatureKey)]
+	if len(sigs) > 0 {
+		m.signatures = make([]*Signature, len(sigs))
+		if ok {
+			for i, h := range sigs {
+				m.signatures[i] = NewSignature(h).SetVerifier(v).SetMessage(m)
+			}
+		}
+	} else {
+		m.signatures = []*Signature{}
+	}
+
+	return m, nil
+}
 
 func NewVerifier() (*Verifier, error) {
 	return &Verifier{
@@ -51,6 +87,12 @@ type Verifier struct {
 	// verifier component
 	tagVerifiersList []TagExtractor
 	fetcher          *query.PublicKeyFetcher
+
+	/*
+		todo:
+			加入options, 用于设置部分情况下的处置方式
+			1. 当签名已经过期时, 是否抛弃签名
+	*/
 }
 
 func (v *Verifier) SetTimeout(t time.Duration) {
@@ -61,51 +103,16 @@ func (v *Verifier) SetResolver(r *net.Resolver) {
 	v.fetcher.SetResolver(r)
 }
 
-type Message struct {
-	content    *bufio.Reader
-	headersMap HeaderMap
-	signatures []*Signature
-}
-
-func NewMessage(v *Verifier, r io.Reader) (*Message, error) {
-	br := bufio.NewReader(r)
-	hm, err := AbstractHeader(br)
-	if err != nil {
-		return nil, err
-	}
-
-	m := &Message{
-		content:    br,
-		headersMap: hm,
-	}
-
-	sigs, ok := m.headersMap[strings.ToLower(SignatureKey)]
-	if len(sigs) > 0 {
-		m.signatures = make([]*Signature, len(sigs))
-		if ok {
-			for i, h := range sigs {
-				m.signatures[i] = NewSignature(h).SetVerifier(v).SetMessage(m)
-			}
-		}
-	} else {
-		m.signatures = []*Signature{}
-	}
-
-	return m, nil
-}
-
-// VerificationGenerator used to generate verification header to store verify result
-// Ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6
-type VerificationGenerator struct {
-}
-
-func (v *Verifier) Validate(ctx context.Context, r io.Reader) ([]*Signature, error) {
+// Validate used to validate a message with the specific verifier
+// ctx is the working context, r is the body of email
+// rt is the receiving time of email which used to compare "x=" tag value in DKIM signature
+func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*Signature, error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout)
 	v.ctx = ctx
 	defer cancel()
 
 	// todo: wrap the error
-	msg, err := NewMessage(v, r)
+	msg, err := NewMessage(v, r, rt)
 	if err != nil {
 		return nil, err
 	}
@@ -113,38 +120,33 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader) ([]*Signature, err
 	if len(msg.signatures) == 0 {
 		return msg.signatures, nil
 	}
+
 	for _, s := range msg.signatures {
-		if err := v.extractTags(s); err != nil {
-			s.verification = generateVerification(err)
+		err = func() error {
+			if err := v.extractTags(s); err != nil {
+				return err
+			}
+			if err := v.getPublicKey(s); err != nil {
+				return err
+			}
+			return v.computeSignature(s)
+		}()
+		if err != nil {
+			s.verification = setupVerification(err)
 			if s.verification.status == StatusPermFail {
 				continue
 			}
 		}
-
-		if err := v.getPublicKey(s); err != nil {
-			s.verification = generateVerification(err)
-			if s.verification.status == StatusPermFail {
-				continue
-			}
-		}
-
-		if err := v.computeSignature(s); err != nil {
-			s.verification = generateVerification(err)
-			if s.verification.status == StatusPermFail {
-				continue
-			}
-		}
-
 		// todo: generate verification for each signature
 	}
 	return msg.signatures, nil
 }
 
-func generateVerification(err error) Verification {
+func setupVerification(err error) Verification {
 	tErr := err.(*DError)
 	return Verification{
 		status:  tErr.status,
-		message: tErr.message,
+		message: tErr.Error(),
 	}
 }
 
@@ -158,7 +160,7 @@ func (v *Verifier) extractTags(s *Signature) error {
 		t, ok := s.GetTagMap()[vfr.Name()]
 		if !ok {
 			if vfr.IsRequired(s) {
-				return NewDkimError(StatusPermFail, "signature missing required tag")
+				return NewDkimError(StatusPermFail, fmt.Sprintf("signature missing required tag: %s", vfr.Name()))
 			}
 		} else {
 			if err := vfr.Extract(s, t); err != nil {
@@ -169,11 +171,12 @@ func (v *Verifier) extractTags(s *Signature) error {
 	return nil
 }
 
-// todo: 还未实现真正意义上的循环验证
 func (v *Verifier) getPublicKey(s *Signature) (err error) {
-	// acquire public key
+	// 1. trivial all query method, for each method find available public key fetcher, go STEP 2 if there are corresponding one
+	// 2. use relative fetcher to fetch txt record, go STEP 3 if no error occurred otherwise go STEP 1
+	// 3. analyze and parse txt record, go STEP 4 if no error occurred otherwise go STEP 2
+	// 4. parse public key and setup usable encryption verifier for signature, exit this trivial if no error occurred otherwise go STEP 3
 	var ks []string
-	var pk string
 	var tempErr error
 	for _, qm := range s.queryMethod {
 		items := strings.SplitN(qm, "/", 2)
@@ -191,36 +194,35 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 				for _, k := range ks {
 					temp, err2 := v.fetcher.ExtractTxtRecord(s.HashAlgorithm.Name(), s.EncryptAlgorithm.Name(), k)
 					if err2 == nil {
-						pk = temp
+						b, err3 := base64.StdEncoding.DecodeString(temp)
+						if err3 != nil {
+							continue
+						}
+						ea, err3 := s.EncryptAlgorithm.NewEncryptionVerifier(b)
+						if err3 != nil {
+							continue
+						}
 						tempErr = nil
+						s.EncryptAlgorithm = ea
 					}
 				}
-				break
+				if !s.EncryptAlgorithm.IsEmpty() {
+					break
+				}
 			} else if errors.As(err, &target) {
 				tempErr = err
 			}
 		}
 	}
+
+	// if tempErr is not nil meaning that the public key is unavailable right now, should retry in the future
 	if tempErr != nil {
 		return WrapError(tempErr, StatusTempFail, "key unavailable")
 	}
-	if pk == "" {
+	if s.EncryptAlgorithm.IsEmpty() {
 		return NewDkimError(StatusPermFail, "no key for signature")
 	}
-
-	// store the public key
-	// todo: temp solution
-	b, err := base64.StdEncoding.DecodeString(pk)
-	if err != nil {
-		return WrapError(err, StatusPermFail, "failed to decode public key from base64 format")
-	}
-
-	s.EncryptAlgorithm, err = s.EncryptAlgorithm.Init(b)
-	if err != nil {
-		return WrapError(err, StatusPermFail, "exception occurred when parsing the public key")
-	}
-
-	return nil
+	return
 }
 
 func (v *Verifier) computeSignature(s *Signature) error {
@@ -291,7 +293,7 @@ func removeCipher(s string) string {
 
 /*
 已经实现的要求:
-	Tag验证阶段
+	Tag解析与验证阶段
 	ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6.1.1
 	1. 当'v='标签不符合当前DKIM版本时, 返回PERMFAIL (incompatible version), 可忽略该签名也可强行验证; 采用忽略签名
 	2. 当缺少必要的tag时, 返回PERMFAIL (signature missing required tag), 且忽略掉该签名
@@ -304,6 +306,7 @@ func removeCipher(s string) string {
 	9. 'h='tag中声明的header序列将会被顺序载入到hash实体中
 	10.'h='tag中可能存在被声明但实际不存在的header, 这些header将不参与签名流程
 	11.'h='tag中可能存在多个同一header的声明, 这意味着每当该header被声明时, 对应的内容应当被载入到hash实体中
+	12. 若'x='标签存在, 且签名已经过期, 则可以返回PERMFAIL (signature expired), 并忽略掉该签名
 
 	获取公钥阶段
 	ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6.1.2
@@ -316,8 +319,10 @@ func removeCipher(s string) string {
 	8. 若公钥信息中含有(h=, 指明hash算法), 而签名中声明的算法中不包含其中, 则返回PERMFAIL (inappropriate hash algorithm)
 	9. 若公钥信息中的公钥(p=)为空, 则表明该密钥对已经被放弃, 则返回PERMFAIL (key revoked)
 	10.若获得到的公钥无法正确验证, 则返回PERMFAIL (inappropriate key algorithm)
+	11.若获得到了多个公钥, 可只取其中一个进行验证, 也可以循环验证
+	(注: 实现了循环获取, 没有实现循环验证; DKIM协议要求, 对于同一个签名, 通过不同种获取方式最终获得到的公钥应当是相同的)
 
-	公钥验证阶段
+	验证公钥阶段
 	ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6.1.3
 	1. 根据DKIM签名中的'c=', 'h=', 'l='等tag的值去生成一个规范化后的邮件, 生成的内容应当另外缓存起来
 	2. 当匹配邮件header name的时候, 应当用字母大小写不敏感的匹配方式进行匹配
@@ -330,15 +335,4 @@ func removeCipher(s string) string {
 todo:
 	控制验证次数, 防止denial-of-service攻击
 	ref: https://datatracker.ietf.org/doc/html/rfc6376#section-6.1
-
-*/
-
-/*
-todo:
-		若'x='标签存在, 且签名已经过期, 则可以返回PERMFAIL (signature expired), 并忽略掉该签名
-*/
-
-/*
-todo:
-		5. 若获得到了多个公钥, 可只取其中一个进行验证, 也可以循环验证
 */
