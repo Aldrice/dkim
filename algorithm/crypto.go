@@ -33,7 +33,7 @@ type RSAVerifier struct {
 }
 
 func (r RSAVerifier) IsEmpty() bool {
-	return r.PublicKey != nil
+	return r.PublicKey == nil
 }
 
 func (r RSAVerifier) NewEncryptionVerifier(pk []byte) (EncryptAlgorithm, error) {

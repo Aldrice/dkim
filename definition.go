@@ -18,26 +18,6 @@ const (
 	StatusTempFail Status = "tempfail"
 )
 
-// Verification todo: 完善相关细节, 参考go-dkim
-type Verification struct {
-	// The SDID claiming responsibility for an introduction of a message into the
-	// mail stream.
-	Domain string
-	// The Agent or User Identifier (AUID) on behalf of which the SDID is taking
-	// responsibility.
-	Identifier string
-
-	// The time that this signature was created. If unknown, it's set to zero.
-	Time time.Time
-	// The expiration time. If the signature doesn't expire, it's set to zero.
-	Expiration time.Time
-
-	// storing the status of verification
-	status Status
-	// message storing the fail reason if status is not empty
-	message string
-}
-
 type Signature struct {
 	verifier *Verifier
 	message  *Message
@@ -64,8 +44,10 @@ type Signature struct {
 	header algorithm.CanonicalizeAlgorithm
 	body   algorithm.CanonicalizeAlgorithm
 
-	// todo: verification would be generate with the info of signature itself
-	verification Verification
+	// storing the status of verification
+	status Status
+	// reason storing the fail reason if status is not empty
+	reason string
 }
 
 type TagMap map[string]string
@@ -96,10 +78,6 @@ func (s *Signature) SetMessage(msg *Message) *Signature {
 
 func (s *Signature) GetTagMap() TagMap {
 	return s.tagMap
-}
-
-func (s *Signature) SetVerification(vfc Verification) {
-	s.verification = vfc
 }
 
 var defaultTagExtractorList = []TagExtractor{

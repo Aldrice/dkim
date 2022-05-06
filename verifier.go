@@ -111,7 +111,6 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*
 	v.ctx = ctx
 	defer cancel()
 
-	// todo: wrap the error
 	msg, err := NewMessage(v, r, rt)
 	if err != nil {
 		return nil, err
@@ -132,22 +131,15 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*
 			return v.computeSignature(s)
 		}()
 		if err != nil {
-			s.verification = setupVerification(err)
-			if s.verification.status == StatusPermFail {
+			tErr := err.(*DError)
+			s.status = tErr.status
+			s.reason = tErr.message
+			if s.status == StatusPermFail {
 				continue
 			}
 		}
-		// todo: generate verification for each signature
 	}
 	return msg.signatures, nil
-}
-
-func setupVerification(err error) Verification {
-	tErr := err.(*DError)
-	return Verification{
-		status:  tErr.status,
-		message: tErr.Error(),
-	}
 }
 
 const (
@@ -172,6 +164,7 @@ func (v *Verifier) extractTags(s *Signature) error {
 }
 
 func (v *Verifier) getPublicKey(s *Signature) (err error) {
+	// todo: limit the amount of public key query
 	// 1. trivial all query method, for each method find available public key fetcher, go STEP 2 if there are corresponding one
 	// 2. use relative fetcher to fetch txt record, go STEP 3 if no error occurred otherwise go STEP 1
 	// 3. analyze and parse txt record, go STEP 4 if no error occurred otherwise go STEP 2
@@ -204,6 +197,7 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 						}
 						tempErr = nil
 						s.EncryptAlgorithm = ea
+						break
 					}
 				}
 				if !s.EncryptAlgorithm.IsEmpty() {
@@ -237,7 +231,6 @@ func (v *Verifier) computeSignature(s *Signature) error {
 		w = &algorithm.LimitedWriter{W: w, N: s.bodyLength.Int64()}
 	}
 	wc := s.body.CanonicalizeBody(w)
-	// todo: may take this error as temp fail
 	if _, err := io.Copy(wc, s.message.content); err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when input the content")
 	}
