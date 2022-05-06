@@ -4,6 +4,7 @@ import (
 	"dkim/algorithm"
 	. "dkim/utils"
 	"errors"
+	"math/big"
 	"net/mail"
 	"strconv"
 	"strings"
@@ -53,8 +54,8 @@ type Signature struct {
 	queryMethod     []string
 	bodyCipher      string
 	bodyHash        string
-	// todo: this number is digit-limited, maximum digit width is 76.
-	bodyLength int64
+	// this number is digit-limited, maximum digit width is 76.
+	bodyLength *big.Int
 	selector   string
 
 	// algorithms
@@ -390,12 +391,19 @@ func (l LengthTagExtractor) Name() string {
 }
 
 func (l LengthTagExtractor) IsRequired(s *Signature) bool {
-	s.bodyLength = -1
+	s.bodyLength = nil
 	return false
 }
 
 func (l LengthTagExtractor) Extract(s *Signature, content string) error {
-	//TODO implement length tag extractor
+	if len(content) > 76 {
+		return NewDkimError(StatusPermFail, "invalid length, this figure should not longer than 76 digits")
+	}
+	length, ok := new(big.Int).SetString(content, 10)
+	if !ok {
+		return NewSyntaxError(errors.New("decimal syntax error"))
+	}
+	s.bodyLength = length
 	return nil
 }
 

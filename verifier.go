@@ -232,8 +232,9 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	// verify body hash
 	hr := hash.New()
 	var w io.Writer = hr
-	if s.bodyLength >= 0 {
-		w = &algorithm.LimitedWriter{W: w, N: s.bodyLength}
+	// todo: cannot fully meet the requirement of rfc document since the size of slice cannot be acquire in big.Int
+	if s.bodyLength != nil {
+		w = &algorithm.LimitedWriter{W: w, N: s.bodyLength.Int64()}
 	}
 	wc := s.body.CanonicalizeBody(w)
 	// todo: may take this error as temp fail

@@ -46,7 +46,7 @@ func (r RSAVerifier) NewEncryptionVerifier(pk []byte) (EncryptAlgorithm, error) 
 		return nil, errors.New("key syntax error, not an RSA public key")
 	}
 	// according to rfc8301 section-3.2, the size of rsa keys should not less than 1024bits
-	// otherwise will be more easily compromise to off-line attacks
+	// otherwise will be more easily compromised to off-line attacks
 	// ref: https://datatracker.ietf.org/doc/html/rfc8301#section-3.2
 	if rpk.Size()*8 < 1024 {
 		return nil, errors.New("key length is shorter than 1024")
