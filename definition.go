@@ -25,29 +25,29 @@ type Signature struct {
 	raw    string
 	tagMap TagMap
 
-	identifier      string
-	domain          string
-	signedAt        time.Time
-	expiredAt       time.Time
-	declaredHeaders []string
-	copiedHeaders   []string
-	queryMethod     []string
-	bodyCipher      string
-	bodyHash        string
+	Identifier      string
+	Domain          string
+	SignedAt        time.Time
+	ExpiredAt       time.Time
+	DeclaredHeaders []string
+	CopiedHeaders   []string
+	QueryMethod     []string
+	BodyCipher      string
+	BodyHash        string
 	// this number is digit-limited, maximum digit width is 76.
-	bodyLength *big.Int
-	selector   string
+	BodyLength *big.Int
+	Selector   string
 
 	// algorithms
 	algorithm.HashAlgorithm
 	algorithm.EncryptAlgorithm
-	header algorithm.CanonicalizeAlgorithm
-	body   algorithm.CanonicalizeAlgorithm
+	HeaderCType algorithm.CanonicalizeAlgorithm
+	BodyCType   algorithm.CanonicalizeAlgorithm
 
 	// storing the status of verification
-	status Status
+	Status Status
 	// reason storing the fail reason if status is not empty
-	reason string
+	Reason string
 }
 
 type TagMap map[string]string
@@ -138,7 +138,7 @@ func (h HeaderTagExtractor) Extract(s *Signature, content string) error {
 		return NewSyntaxError(errors.New("empty h tag is not allowed"))
 	}
 
-	s.declaredHeaders = make([]string, len(headers))
+	s.DeclaredHeaders = make([]string, len(headers))
 	fromExist := false
 	for i, header := range headers {
 		header = strings.TrimSpace(header)
@@ -150,7 +150,7 @@ func (h HeaderTagExtractor) Extract(s *Signature, content string) error {
 			return NewSyntaxError(errors.New("dkim signature key was not acceptable in h tag"))
 		}
 
-		s.declaredHeaders[i] = header
+		s.DeclaredHeaders[i] = header
 	}
 	if !fromExist {
 		return NewSyntaxError(errors.New("from field not signed"))
@@ -173,15 +173,15 @@ func (d DomainTagExtractor) Extract(s *Signature, content string) error {
 	if !DomainRegexp.MatchString(content) {
 		return NewSyntaxError(errors.New("invalid domain format"))
 	}
-	s.domain = content
-	if s.identifier != "" {
+	s.Domain = content
+	if s.Identifier != "" {
 		// todo: s.identifier may be equal or the subdomain of content
-		items := strings.SplitN(s.identifier, "@", 2)
+		items := strings.SplitN(s.Identifier, "@", 2)
 		if !strings.HasSuffix(items[1], content) {
 			return NewSyntaxError(errors.New("domain mismatch"))
 		}
 	} else {
-		s.identifier = "@" + content
+		s.Identifier = "@" + content
 	}
 	return nil
 }
@@ -214,19 +214,19 @@ func (i IdentityTagExtractor) Extract(s *Signature, content string) error {
 	}
 
 	// todo: temporary solution, complete design definition see: https://datatracker.ietf.org/doc/html/rfc6376#page-21
-	if s.identifier != "" {
+	if s.Identifier != "" {
 		d := items[1]
 		if !DomainRegexp.MatchString(d) {
 			return NewSyntaxError(errors.New("invalid syntax of identifier"))
 		}
-		temp := strings.TrimLeft(s.identifier, "@")
+		temp := strings.TrimLeft(s.Identifier, "@")
 		if !strings.HasSuffix(d, temp) {
 			return NewSyntaxError(
 				errors.New("domain mismatch"),
 			)
 		}
 	}
-	s.identifier = content
+	s.Identifier = content
 	return nil
 }
 
@@ -270,7 +270,7 @@ func (c CanonicalTagExtractor) Name() string {
 
 func (c CanonicalTagExtractor) IsRequired(s *Signature) bool {
 	cAlg := s.verifier.canonicalizeMap[defaultCanonicalizeType]
-	s.header, s.body = cAlg, cAlg
+	s.HeaderCType, s.BodyCType = cAlg, cAlg
 	return false
 }
 
@@ -282,20 +282,20 @@ func (c CanonicalTagExtractor) Extract(s *Signature, content string) error {
 	var ok bool
 	switch len(ts) {
 	case 2:
-		s.header, ok = s.verifier.canonicalizeMap[ts[0]]
+		s.HeaderCType, ok = s.verifier.canonicalizeMap[ts[0]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
-		s.body, ok = s.verifier.canonicalizeMap[ts[1]]
+		s.BodyCType, ok = s.verifier.canonicalizeMap[ts[1]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
 	case 1:
-		s.header, ok = s.verifier.canonicalizeMap[ts[0]]
+		s.HeaderCType, ok = s.verifier.canonicalizeMap[ts[0]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
-		s.body = s.verifier.canonicalizeMap["simple"]
+		s.BodyCType = s.verifier.canonicalizeMap["simple"]
 	default:
 		return NewSyntaxError(errors.New("invalid canonicalization tag value"))
 	}
@@ -319,7 +319,7 @@ func (b BodyTagExtractor) Extract(s *Signature, content string) error {
 	if !Base64Regexp.MatchString(content) {
 		return NewSyntaxError(errors.New("invalid content in 'b=' tag value"))
 	}
-	s.bodyCipher = content
+	s.BodyCipher = content
 	return nil
 }
 
@@ -340,7 +340,7 @@ func (bh BodyHashExtractor) Extract(s *Signature, content string) error {
 	if !Base64Regexp.MatchString(content) {
 		return NewSyntaxError(errors.New("invalid content in 'b=' tag value"))
 	}
-	s.bodyHash = content
+	s.BodyHash = content
 	return nil
 }
 
@@ -355,8 +355,8 @@ func (sr SelectorTagExtractor) IsRequired(_ *Signature) bool {
 }
 
 func (sr SelectorTagExtractor) Extract(s *Signature, content string) error {
-	s.selector = strings.TrimSpace(content)
-	if s.selector == "" {
+	s.Selector = strings.TrimSpace(content)
+	if s.Selector == "" {
 		return NewSyntaxError(errors.New("invalid content in 's=' tag value"))
 	}
 	return nil
@@ -369,7 +369,7 @@ func (l LengthTagExtractor) Name() string {
 }
 
 func (l LengthTagExtractor) IsRequired(s *Signature) bool {
-	s.bodyLength = nil
+	s.BodyLength = nil
 	return false
 }
 
@@ -381,7 +381,7 @@ func (l LengthTagExtractor) Extract(s *Signature, content string) error {
 	if !ok {
 		return NewSyntaxError(errors.New("decimal syntax error"))
 	}
-	s.bodyLength = length
+	s.BodyLength = length
 	return nil
 }
 
@@ -392,7 +392,7 @@ func (q QueryMethodTagExtractor) Name() string {
 }
 
 func (q QueryMethodTagExtractor) IsRequired(s *Signature) bool {
-	s.queryMethod = []string{"dns/txt"}
+	s.QueryMethod = []string{"dns/txt"}
 	return false
 }
 
@@ -400,7 +400,7 @@ func (q QueryMethodTagExtractor) IsRequired(s *Signature) bool {
 // query method with the form of 'type/[options]'
 func (q QueryMethodTagExtractor) Extract(s *Signature, content string) error {
 	if content != "" {
-		s.queryMethod = strings.Split(content, ":")
+		s.QueryMethod = strings.Split(content, ":")
 	}
 	return nil
 }
@@ -412,7 +412,7 @@ func (st SignedAtTagExtractor) Name() string {
 }
 
 func (st SignedAtTagExtractor) IsRequired(s *Signature) bool {
-	s.signedAt = time.Time{}
+	s.SignedAt = time.Time{}
 	return false
 }
 
@@ -424,10 +424,10 @@ func (st SignedAtTagExtractor) Extract(s *Signature, content string) error {
 	if t.After(time.Now()) {
 		return NewDkimError(StatusPermFail, "invalid timestamp, declared timestamp is in the future")
 	}
-	if !s.expiredAt.IsZero() && t.After(s.expiredAt) {
+	if !s.ExpiredAt.IsZero() && t.After(s.ExpiredAt) {
 		return NewDkimError(StatusPermFail, "invalid timestamp, signed time after the expired time")
 	}
-	s.signedAt = t
+	s.SignedAt = t
 	return nil
 }
 
@@ -438,7 +438,7 @@ func (e ExpiredAtTagExtractor) Name() string {
 }
 
 func (e ExpiredAtTagExtractor) IsRequired(s *Signature) bool {
-	s.expiredAt = time.Time{}
+	s.ExpiredAt = time.Time{}
 	return false
 }
 
@@ -449,13 +449,13 @@ func (e ExpiredAtTagExtractor) Extract(s *Signature, content string) error {
 	}
 	// The value of the "x=" tag MUST be greater than the value of the "t=" tag if both are present.
 	// ref: https://datatracker.ietf.org/doc/html/rfc6376#page-24
-	if !s.signedAt.IsZero() && s.signedAt.After(t) {
+	if !s.SignedAt.IsZero() && s.SignedAt.After(t) {
 		return NewDkimError(StatusPermFail, "invalid timestamp, signed time after the expired time")
 	}
 	if s.message.receiveTime.After(t) {
 		return NewDkimError(StatusPermFail, "signature expired")
 	}
-	s.expiredAt = t
+	s.ExpiredAt = t
 	return nil
 }
 
@@ -470,7 +470,7 @@ func (c CopiedTagExtractor) IsRequired(_ *Signature) bool {
 }
 
 func (c CopiedTagExtractor) Extract(s *Signature, content string) error {
-	s.copiedHeaders = strings.Split(StripWhitespace(content), "|")
+	s.CopiedHeaders = strings.Split(StripWhitespace(content), "|")
 	return nil
 }
 

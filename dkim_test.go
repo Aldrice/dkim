@@ -34,11 +34,18 @@ func TestNewVerifier(t *testing.T) {
 	tests := []struct {
 		name        string
 		contentPath string
-		want        *Verifier
 		wantErr     bool
 	}{
-		{name: "1", contentPath: "./testdata/email_content_1.txt", want: nil, wantErr: false},
-		{name: "2", contentPath: "./testdata/email_content_2.txt", want: nil, wantErr: false},
+		{
+			name:        "1",
+			contentPath: "./testdata/email_content_1.txt",
+			wantErr:     false,
+		},
+		{
+			name:        "2",
+			contentPath: "./testdata/email_content_2.txt",
+			wantErr:     false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,14 +58,12 @@ func TestNewVerifier(t *testing.T) {
 				t.Errorf("failed to get verifier")
 				return
 			}
-			_, err = v.Validate(context.Background(), bytes.NewReader(content), time.Now())
+			sigs, err := v.Validate(context.Background(), bytes.NewReader(content), time.Now())
 			if err != nil {
 				t.Errorf("failed to validate signatures")
 				return
 			}
-			//if !reflect.DeepEqual(got, tt.want) {
-			//	t.Errorf("NewVerifier() got = %v, want %v", got, tt.want)
-			//}
+			fmt.Println(sigs[0])
 		})
 	}
 }

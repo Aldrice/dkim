@@ -92,6 +92,7 @@ type Verifier struct {
 		todo:
 			加入options, 用于设置部分情况下的处置方式
 			1. 当签名已经过期时, 是否抛弃签名
+			2. 当算法被抛弃时, 是否抛弃签名
 	*/
 }
 
@@ -117,7 +118,7 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*
 	}
 
 	if len(msg.signatures) == 0 {
-		return msg.signatures, nil
+		return msg.signatures, errors.New("no dkim-signature in this email")
 	}
 
 	for _, s := range msg.signatures {
@@ -132,9 +133,9 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*
 		}()
 		if err != nil {
 			tErr := err.(*DError)
-			s.status = tErr.status
-			s.reason = tErr.message
-			if s.status == StatusPermFail {
+			s.Status = tErr.status
+			s.Reason = tErr.message
+			if s.Status == StatusPermFail {
 				continue
 			}
 		}
@@ -171,7 +172,7 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 	// 4. parse public key and setup usable encryption verifier for signature, exit this trivial if no error occurred otherwise go STEP 3
 	var ks []string
 	var tempErr error
-	for _, qm := range s.queryMethod {
+	for _, qm := range s.QueryMethod {
 		items := strings.SplitN(qm, "/", 2)
 		qt, ok := v.fetcher.GetTypeMap()[items[0]]
 		if !ok {
@@ -182,7 +183,7 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 				option = items[1]
 			}
 			target := &net.DNSError{}
-			ks, err = qt.QueryPublicKey(v.ctx, option, s.domain, s.selector)
+			ks, err = qt.QueryPublicKey(v.ctx, option, s.Domain, s.Selector)
 			if err == nil {
 				for _, k := range ks {
 					temp, err2 := v.fetcher.ExtractTxtRecord(s.HashAlgorithm.Name(), s.EncryptAlgorithm.Name(), k)
@@ -227,17 +228,17 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	hr := hash.New()
 	var w io.Writer = hr
 	// todo: cannot fully meet the requirement of rfc document since the size of slice cannot be acquire in big.Int
-	if s.bodyLength != nil {
-		w = &algorithm.LimitedWriter{W: w, N: s.bodyLength.Int64()}
+	if s.BodyLength != nil {
+		w = &algorithm.LimitedWriter{W: w, N: s.BodyLength.Int64()}
 	}
-	wc := s.body.CanonicalizeBody(w)
+	wc := s.BodyCType.CanonicalizeBody(w)
 	if _, err := io.Copy(wc, s.message.content); err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when input the content")
 	}
 	if err := wc.Close(); err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when closing the writer")
 	}
-	bh, err := base64.StdEncoding.DecodeString(s.bodyHash)
+	bh, err := base64.StdEncoding.DecodeString(s.BodyHash)
 	if err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when decoding the bh string")
 	}
@@ -247,13 +248,13 @@ func (v *Verifier) computeSignature(s *Signature) error {
 
 	// compute the hash and validate the signature
 	hr.Reset()
-	for _, h := range s.declaredHeaders {
+	for _, h := range s.DeclaredHeaders {
 		h, ok := s.message.headersMap[strings.ToLower(h)]
 		if !ok {
 			continue
 		}
 		for _, item := range h {
-			_, err := hr.Write([]byte(s.header.CanonicalizeHeader(item.Raw)))
+			_, err := hr.Write([]byte(s.HeaderCType.CanonicalizeHeader(item.Raw)))
 			if err != nil {
 				return WrapError(err, StatusPermFail, "failed to write canonicalize header into hash")
 			}
@@ -263,13 +264,13 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	// todo: find the relative definition in the rfc document
 	// remove signature encryption cipher in the 'b=' tag of signature header
 	// than press it into queue prepare for compute
-	sf := s.body.CanonicalizeHeader(removeCipher(s.raw))
+	sf := s.BodyCType.CanonicalizeHeader(removeCipher(s.raw))
 	sf = strings.TrimRight(sf, CRLF)
 	if _, err := hr.Write([]byte(sf)); err != nil {
 		return WrapError(err, StatusPermFail, "failed to write canonicalize signature field into hash")
 	}
 
-	bc, err := base64.StdEncoding.DecodeString(s.bodyCipher)
+	bc, err := base64.StdEncoding.DecodeString(s.BodyCipher)
 	if err != nil {
 		return WrapError(err, StatusPermFail, "failed to decode body cipher from base64 format")
 	}
