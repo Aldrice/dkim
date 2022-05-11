@@ -37,13 +37,14 @@ func TestNewVerifier(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "1",
-			contentPath: "./testdata/email_content_1.txt",
+			name:        "qq-1",
+			contentPath: "./testdata/qq-1.txt",
 			wantErr:     false,
 		},
+		// todo: not success yet
 		{
-			name:        "2",
-			contentPath: "./testdata/email_content_2.txt",
+			name:        "163-1",
+			contentPath: "./testdata/163-1.txt",
 			wantErr:     false,
 		},
 	}
@@ -63,7 +64,10 @@ func TestNewVerifier(t *testing.T) {
 				t.Errorf("failed to validate signatures")
 				return
 			}
-			fmt.Println(sigs[0])
+			for _, sig := range sigs {
+				fmt.Println(sig.Status)
+				fmt.Println(sig.Reason)
+			}
 		})
 	}
 }

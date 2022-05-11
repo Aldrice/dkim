@@ -377,6 +377,9 @@ func (l LengthTagExtractor) Extract(s *Signature, content string) error {
 	if len(content) > 76 {
 		return NewDkimError(StatusPermFail, "invalid length, this figure should not longer than 76 digits")
 	}
+	if len(content) > 64 {
+		return NewDkimError(StatusPermFail, "unsupported length, server cannot support the figure longer than 64 digits")
+	}
 	length, ok := new(big.Int).SetString(content, 10)
 	if !ok {
 		return NewSyntaxError(errors.New("decimal syntax error"))

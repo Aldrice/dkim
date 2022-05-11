@@ -90,6 +90,7 @@ type Verifier struct {
 
 	/*
 		todo:
+			注: 在完成Signer部分后再做此内容
 			加入options, 用于设置部分情况下的处置方式
 			1. 当签名已经过期时, 是否抛弃签名
 			2. 当算法被抛弃时, 是否抛弃签名
@@ -247,6 +248,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	}
 
 	// compute the hash and validate the signature
+	// todo: 有设计方面的错误
 	hr.Reset()
 	for _, h := range s.DeclaredHeaders {
 		h, ok := s.message.headersMap[strings.ToLower(h)]

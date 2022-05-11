@@ -1,0 +1,46 @@
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=163.com;
+	s=s110527; h=Date:From:Subject:MIME-Version:Message-ID; bh=my0YU
+	7LKmOxmy/8BV63VCdnGkqKq5jv27DlkAheBegM=; b=R9NvFyqY5jSJpwwS4+WQ8
+	GLJfg1hHVtsBbq1qivUiNHPGTSIwVm0tP/zS5tFL6aRz3eQZ2Yuw0ibug9Fk1IrR
+	HcEfMnwsQbM6IBmcP3lL0NJEaorwnQOv9bQb//8RnmL0ZwPe00XFou2BM29xCLmN
+	tVQS19g5bRBLhlivcWZ6ew=
+Received: from a1336818710$163.com ( [120.85.135.121] ) by
+ ajax-webmail-wmsvr37 (Coremail) ; Mon, 4 Apr 2022 12:32:29 +0800 (CST)
+X-Originating-IP: [120.85.135.121]
+Date: Mon, 4 Apr 2022 12:32:29 +0800 (CST)
+From: test  <a1336818710@163.com>
+To: xxx@mail1.u233.email
+Subject: test
+X-Priority: 3
+X-Mailer: Coremail Webmail Server Version XT5.0.13 build 20210622(1d4788a8)
+ Copyright (c) 2002-2022 www.mailtech.cn 163com
+X-CM-CTRLDATA: NRRdo2Zvb3Rlcl9odG09NDUxOjU2
+Content-Type: multipart/alternative;
+	boundary="----=_Part_14945_1102375957.1649046749691"
+MIME-Version: 1.0
+Message-ID: <1df63cf.ffd.17ff2d881fc.Coremail.a1336818710@163.com>
+X-Coremail-Locale: zh_CN
+X-CM-TRANSID:JcGowADHeCzddEpih8YUAA--.42741W
+X-CM-SenderInfo: jdrtjlyyryliqq6rljoofrz/xtbBLxDWUWHmlvKWpQAGsu
+X-Coremail-Antispam: 1U5529EdanIXcx71UUUUU7vcSsGvfC2KfnxnUU==
+
+------=_Part_14945_1102375957.1649046749691
+Content-Type: text/plain; charset=GBK
+Content-Transfer-Encoding: base64
+
+dGVzdC1hYmMKCgoKCgogCgoKCgoKIAoKCgoKCiAKCgoKCgogCgoKCgoKIAoKCgoKCiA=
+------=_Part_14945_1102375957.1649046749691
+Content-Type: text/html; charset=GBK
+Content-Transfer-Encoding: base64
+
+PGRpdiBzdHlsZT0ibGluZS1oZWlnaHQ6MS43O2NvbG9yOiMwMDAwMDA7Zm9udC1zaXplOjE0cHg7
+Zm9udC1mYW1pbHk6QXJpYWwiPjxwIHN0eWxlPSJtYXJnaW46MDsiPnRlc3QtYWJjPC9wPjwvZGl2
+Pjxicj48YnI+PHNwYW4gdGl0bGU9Im5ldGVhc2Vmb290ZXIiPjxwPiZuYnNwOzwvcD48L3NwYW4+
+PGJyPjxicj48c3BhbiB0aXRsZT0ibmV0ZWFzZWZvb3RlciI+PHA+Jm5ic3A7PC9wPjwvc3Bhbj48
+YnI+PGJyPjxzcGFuIHRpdGxlPSJuZXRlYXNlZm9vdGVyIj48cD4mbmJzcDs8L3A+PC9zcGFuPjxi
+cj48YnI+PHNwYW4gdGl0bGU9Im5ldGVhc2Vmb290ZXIiPjxwPiZuYnNwOzwvcD48L3NwYW4+PGJy
+Pjxicj48c3BhbiB0aXRsZT0ibmV0ZWFzZWZvb3RlciI+PHA+Jm5ic3A7PC9wPjwvc3Bhbj48YnI+
+PGJyPjxzcGFuIHRpdGxlPSJuZXRlYXNlZm9vdGVyIj48cD4mbmJzcDs8L3A+PC9zcGFuPjxicj48
+YnI+PHNwYW4gdGl0bGU9Im5ldGVhc2Vmb290ZXIiPjxwPiZuYnNwOzwvcD48L3NwYW4+
+------=_Part_14945_1102375957.1649046749691--
+

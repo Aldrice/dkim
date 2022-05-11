@@ -24,6 +24,9 @@ func newTXTRecord(pfr *PublicKeyFetcher, hash, key, raw string) (*TXTRecord, err
 	items := strings.Split(raw, ";")
 	mp := make(map[string]string, len(items))
 	for _, item := range items {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
 		pair := strings.SplitN(item, "=", 2)
 		if len(pair) != 2 {
 			return nil, errors.New("key syntax error")
