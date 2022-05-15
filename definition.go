@@ -1,11 +1,15 @@
 package dkim
 
 import (
+	"bytes"
 	"dkim/algorithm"
 	. "dkim/utils"
 	"errors"
+	"fmt"
+	"io"
 	"math/big"
 	"net/mail"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,34 +19,38 @@ type Status string
 
 const (
 	StatusPermFail Status = "permfail"
-	StatusTempFail Status = "tempfail"
+	StatusTempFail        = "tempfail"
+	StatusSignFail        = "signfail"
 )
 
 type Signature struct {
+	// todo: 裁剪部分无效内容
 	verifier *Verifier
+	signer   *Signer
 	message  *Message
 
-	raw    string
-	tagMap TagMap
+	Raw    string
+	TagMap TagMap
 
-	Identifier      string
-	Domain          string
-	SignedAt        time.Time
-	ExpiredAt       time.Time
-	DeclaredHeaders []string
-	CopiedHeaders   []string
-	QueryMethod     []string
-	BodyCipher      string
-	BodyHash        string
+	Identifier    string
+	Domain        string
+	SignedAt      time.Time
+	ExpiredAt     time.Time
+	SignedHeaders []string
+	CopiedHeaders []string
+	QueryMethod   []string
+	BodyCipher    string
+	BodyHash      string
 	// this number is digit-limited, maximum digit width is 76.
 	BodyLength *big.Int
 	Selector   string
+	PublicKey  []byte
 
 	// algorithms
 	algorithm.HashAlgorithm
 	algorithm.EncryptAlgorithm
-	HeaderCType algorithm.CanonicalizeAlgorithm
-	BodyCType   algorithm.CanonicalizeAlgorithm
+	HeaderCanonicalization algorithm.CanonicalizeAlgorithm
+	BodyCanonicalization   algorithm.CanonicalizeAlgorithm
 
 	// storing the status of verification
 	Status Status
@@ -52,7 +60,7 @@ type Signature struct {
 
 type TagMap map[string]string
 
-func NewSignature(item Header) *Signature {
+func (v *Verifier) NewSignature(item Header) *Signature {
 	rawTags := strings.Split(item.Val, ";")
 	tm := make(TagMap, len(rawTags))
 	for _, rt := range rawTags {
@@ -63,7 +71,71 @@ func NewSignature(item Header) *Signature {
 		}
 		tm[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
-	return &Signature{tagMap: tm, raw: item.Raw}
+	return &Signature{TagMap: tm, Raw: item.Raw, verifier: v}
+}
+
+func (s *Signer) NewSignature(opt *SignOption) *Signature {
+	return &Signature{
+		TagMap:                 map[string]string{},
+		Identifier:             opt.Identifier,
+		Domain:                 opt.Domain,
+		ExpiredAt:              opt.Expiration,
+		SignedHeaders:          opt.SignedHeaderKeys,
+		QueryMethod:            opt.QueryMethod,
+		Selector:               opt.Selector,
+		HashAlgorithm:          s.hashMap[opt.Hash.String()],
+		HeaderCanonicalization: opt.HeaderCanonicalization,
+		BodyCanonicalization:   opt.BodyCanonicalization,
+	}
+}
+
+func (s *Signature) FormatToRaw() string {
+	var fold strings.Builder
+	raw := "DKIM-Signature: " + formatHeaderParams(s.TagMap) + CRLF
+	buf := bytes.NewBufferString(raw)
+	line := make([]byte, 75) // 78 - len("\r\n\s")
+	first := true
+	for l, err := buf.Read(line); err != io.EOF; l, err = buf.Read(line) {
+		if first {
+			first = false
+		} else {
+			fold.WriteString("\r\n ")
+		}
+		fold.Write(line[:l])
+	}
+	return fold.String()
+}
+
+// todo: restructure this method
+func formatHeaderParams(params TagMap) string {
+	keys := make([]string, 0, len(params))
+	found := false
+	for k := range params {
+		if k == "b" {
+			found = true
+		} else {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if found {
+		keys = append(keys, "b")
+	}
+
+	var s string
+	first := true
+	for _, k := range keys {
+		v := params[k]
+
+		if first {
+			first = false
+		} else {
+			s += " "
+		}
+
+		s += k + "=" + v + ";"
+	}
+	return s
 }
 
 func (s *Signature) SetVerifier(vfr *Verifier) *Signature {
@@ -71,39 +143,56 @@ func (s *Signature) SetVerifier(vfr *Verifier) *Signature {
 	return s
 }
 
+func (s *Signature) SetSigner(sgr *Signer) *Signature {
+	s.signer = sgr
+	return s
+}
+
 func (s *Signature) SetMessage(msg *Message) *Signature {
+	if s.message != nil {
+		s.message.removeSignature(s)
+	}
 	s.message = msg
+	msg.signatures = append(msg.signatures, s)
 	return s
 }
 
 func (s *Signature) GetTagMap() TagMap {
-	return s.tagMap
+	return s.TagMap
 }
 
-var defaultTagExtractorList = []TagExtractor{
+var defaultTagHandlerList = []TagHandler{
 	new(VersionTagExtractor),
 	new(HeaderTagExtractor),
 	new(DomainTagExtractor),
 	new(IdentityTagExtractor),
 	new(AlgorithmTagExtractor),
 	new(CanonicalTagExtractor),
-	new(BodyTagExtractor),
-	new(BodyHashExtractor),
 	new(SelectorTagExtractor),
 	new(LengthTagExtractor),
 	new(QueryMethodTagExtractor),
 	new(SignedAtTagExtractor),
 	new(ExpiredAtTagExtractor),
 	new(CopiedTagExtractor),
+	new(BodyHashExtractor),
+	new(BodyTagExtractor),
 }
 
-type TagExtractor interface {
+// todo: 在生成时结合IsRequired进行检查
+
+type TagHandler interface {
 	Name() string
 	IsRequired(s *Signature) bool
 	Extract(s *Signature, content string) error
+	Generate(s *Signature) error
 }
 
 type VersionTagExtractor struct{}
+
+func (v VersionTagExtractor) Generate(s *Signature) error {
+	s.TagMap[v.Name()] = s.signer.version
+	return nil
+}
 
 func (v VersionTagExtractor) Name() string {
 	return "v"
@@ -122,6 +211,30 @@ func (v VersionTagExtractor) Extract(s *Signature, content string) error {
 
 type HeaderTagExtractor struct{}
 
+func (h HeaderTagExtractor) Generate(s *Signature) error {
+	if s.SignedHeaders != nil {
+		exist := false
+		for _, k := range s.SignedHeaders {
+			if strings.ToLower(k) == "from" {
+				exist = true
+				break
+			}
+		}
+		if !exist {
+			return NewSignError("signed header must include 'from' field")
+		}
+	} else {
+		s.SignedHeaders = make([]string, len(s.message.headersMap))
+		i := 0
+		for k := range s.message.headersMap {
+			s.SignedHeaders[i] = k
+			i++
+		}
+	}
+	s.TagMap[h.Name()] = strings.Join(s.SignedHeaders, ":")
+	return nil
+}
+
 func (h HeaderTagExtractor) Name() string {
 	return "h"
 }
@@ -138,7 +251,7 @@ func (h HeaderTagExtractor) Extract(s *Signature, content string) error {
 		return NewSyntaxError(errors.New("empty h tag is not allowed"))
 	}
 
-	s.DeclaredHeaders = make([]string, len(headers))
+	s.SignedHeaders = make([]string, len(headers))
 	fromExist := false
 	for i, header := range headers {
 		header = strings.TrimSpace(header)
@@ -150,16 +263,20 @@ func (h HeaderTagExtractor) Extract(s *Signature, content string) error {
 			return NewSyntaxError(errors.New("dkim signature key was not acceptable in h tag"))
 		}
 
-		s.DeclaredHeaders[i] = header
+		s.SignedHeaders[i] = header
 	}
 	if !fromExist {
 		return NewSyntaxError(errors.New("from field not signed"))
 	}
-
 	return nil
 }
 
 type DomainTagExtractor struct{}
+
+func (d DomainTagExtractor) Generate(s *Signature) error {
+	s.TagMap[d.Name()] = s.Domain
+	return nil
+}
 
 func (d DomainTagExtractor) Name() string {
 	return "d"
@@ -187,6 +304,13 @@ func (d DomainTagExtractor) Extract(s *Signature, content string) error {
 }
 
 type IdentityTagExtractor struct{}
+
+func (i IdentityTagExtractor) Generate(s *Signature) error {
+	if s.Identifier != "" {
+		s.TagMap[i.Name()] = s.Identifier
+	}
+	return nil
+}
 
 func (i IdentityTagExtractor) Name() string {
 	return "i"
@@ -232,11 +356,16 @@ func (i IdentityTagExtractor) Extract(s *Signature, content string) error {
 
 type AlgorithmTagExtractor struct{}
 
+func (a AlgorithmTagExtractor) Generate(s *Signature) error {
+	s.TagMap[a.Name()] = fmt.Sprintf("%s-%s", s.EncryptAlgorithm.Name(), s.HashAlgorithm)
+	return nil
+}
+
 func (a AlgorithmTagExtractor) Name() string {
 	return "a"
 }
 
-func (a AlgorithmTagExtractor) IsRequired(*Signature) bool {
+func (a AlgorithmTagExtractor) IsRequired(_ *Signature) bool {
 	return true
 }
 
@@ -264,13 +393,23 @@ const defaultCanonicalizeType = "simple"
 
 type CanonicalTagExtractor struct{}
 
+func (c CanonicalTagExtractor) Generate(s *Signature) error {
+	s.TagMap[c.Name()] = fmt.Sprintf("%s/%s",
+		s.HeaderCanonicalization.Name(),
+		s.BodyCanonicalization.Name(),
+	)
+	return nil
+}
+
 func (c CanonicalTagExtractor) Name() string {
 	return "c"
 }
 
 func (c CanonicalTagExtractor) IsRequired(s *Signature) bool {
-	cAlg := s.verifier.canonicalizeMap[defaultCanonicalizeType]
-	s.HeaderCType, s.BodyCType = cAlg, cAlg
+	if s != nil {
+		cAlg := s.verifier.canonicalizeMap[defaultCanonicalizeType]
+		s.HeaderCanonicalization, s.BodyCanonicalization = cAlg, cAlg
+	}
 	return false
 }
 
@@ -282,20 +421,20 @@ func (c CanonicalTagExtractor) Extract(s *Signature, content string) error {
 	var ok bool
 	switch len(ts) {
 	case 2:
-		s.HeaderCType, ok = s.verifier.canonicalizeMap[ts[0]]
+		s.HeaderCanonicalization, ok = s.verifier.canonicalizeMap[ts[0]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
-		s.BodyCType, ok = s.verifier.canonicalizeMap[ts[1]]
+		s.BodyCanonicalization, ok = s.verifier.canonicalizeMap[ts[1]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
 	case 1:
-		s.HeaderCType, ok = s.verifier.canonicalizeMap[ts[0]]
+		s.HeaderCanonicalization, ok = s.verifier.canonicalizeMap[ts[0]]
 		if !ok {
 			return NewSyntaxError(errors.New("unsupported canonicalization type"))
 		}
-		s.BodyCType = s.verifier.canonicalizeMap["simple"]
+		s.BodyCanonicalization = s.verifier.canonicalizeMap["simple"]
 	default:
 		return NewSyntaxError(errors.New("invalid canonicalization tag value"))
 	}
@@ -303,6 +442,11 @@ func (c CanonicalTagExtractor) Extract(s *Signature, content string) error {
 }
 
 type BodyTagExtractor struct{}
+
+func (b BodyTagExtractor) Generate(s *Signature) error {
+	s.TagMap[b.Name()] = ""
+	return nil
+}
 
 func (b BodyTagExtractor) Name() string {
 	return "b"
@@ -325,6 +469,10 @@ func (b BodyTagExtractor) Extract(s *Signature, content string) error {
 
 type BodyHashExtractor struct{}
 
+func (bh BodyHashExtractor) Generate(_ *Signature) error {
+	return nil
+}
+
 func (bh BodyHashExtractor) Name() string {
 	return "bh"
 }
@@ -346,6 +494,11 @@ func (bh BodyHashExtractor) Extract(s *Signature, content string) error {
 
 type SelectorTagExtractor struct{}
 
+func (sr SelectorTagExtractor) Generate(s *Signature) error {
+	s.TagMap[sr.Name()] = s.Selector
+	return nil
+}
+
 func (sr SelectorTagExtractor) Name() string {
 	return "s"
 }
@@ -364,12 +517,19 @@ func (sr SelectorTagExtractor) Extract(s *Signature, content string) error {
 
 type LengthTagExtractor struct{}
 
+func (l LengthTagExtractor) Generate(s *Signature) error {
+	//TODO implement me
+	return nil
+}
+
 func (l LengthTagExtractor) Name() string {
 	return "l"
 }
 
 func (l LengthTagExtractor) IsRequired(s *Signature) bool {
-	s.BodyLength = nil
+	if s != nil {
+		s.BodyLength = nil
+	}
 	return false
 }
 
@@ -390,12 +550,19 @@ func (l LengthTagExtractor) Extract(s *Signature, content string) error {
 
 type QueryMethodTagExtractor struct{}
 
+func (q QueryMethodTagExtractor) Generate(s *Signature) error {
+	s.TagMap[q.Name()] = strings.Join(s.QueryMethod, ":")
+	return nil
+}
+
 func (q QueryMethodTagExtractor) Name() string {
 	return "q"
 }
 
 func (q QueryMethodTagExtractor) IsRequired(s *Signature) bool {
-	s.QueryMethod = []string{"dns/txt"}
+	if s != nil {
+		s.QueryMethod = []string{"dns/txt"}
+	}
 	return false
 }
 
@@ -410,12 +577,19 @@ func (q QueryMethodTagExtractor) Extract(s *Signature, content string) error {
 
 type SignedAtTagExtractor struct{}
 
+func (st SignedAtTagExtractor) Generate(s *Signature) error {
+	s.TagMap[st.Name()] = strconv.FormatInt(time.Now().Unix(), 10)
+	return nil
+}
+
 func (st SignedAtTagExtractor) Name() string {
 	return "t"
 }
 
 func (st SignedAtTagExtractor) IsRequired(s *Signature) bool {
-	s.SignedAt = time.Time{}
+	if s != nil {
+		s.SignedAt = time.Time{}
+	}
 	return false
 }
 
@@ -436,12 +610,19 @@ func (st SignedAtTagExtractor) Extract(s *Signature, content string) error {
 
 type ExpiredAtTagExtractor struct{}
 
+func (e ExpiredAtTagExtractor) Generate(s *Signature) error {
+	s.TagMap[e.Name()] = strconv.FormatInt(s.ExpiredAt.Unix(), 10)
+	return nil
+}
+
 func (e ExpiredAtTagExtractor) Name() string {
 	return "x"
 }
 
 func (e ExpiredAtTagExtractor) IsRequired(s *Signature) bool {
-	s.ExpiredAt = time.Time{}
+	if s != nil {
+		s.ExpiredAt = time.Time{}
+	}
 	return false
 }
 
@@ -463,6 +644,11 @@ func (e ExpiredAtTagExtractor) Extract(s *Signature, content string) error {
 }
 
 type CopiedTagExtractor struct{}
+
+func (c CopiedTagExtractor) Generate(s *Signature) error {
+	//TODO implement me
+	return nil
+}
 
 func (c CopiedTagExtractor) Name() string {
 	return "z"

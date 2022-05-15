@@ -41,10 +41,37 @@ func TestNewVerifier(t *testing.T) {
 			contentPath: "./testdata/qq-1.txt",
 			wantErr:     false,
 		},
-		// todo: not success yet
 		{
 			name:        "163-1",
 			contentPath: "./testdata/163-1.txt",
+			wantErr:     false,
+		},
+		{
+			name:        "gmail-1",
+			contentPath: "./testdata/gmail-1.txt",
+			wantErr:     false,
+		},
+		// todo: not pass yet: bh
+		{
+			name:        "protonmail-1",
+			contentPath: "./testdata/protonmail-1.txt",
+			wantErr:     false,
+		},
+		// todo: not pass yet: b
+		{
+			name:        "tutanota-1",
+			contentPath: "./testdata/tutanota-1.txt",
+			wantErr:     false,
+		},
+		{
+			name:        "hotmail-1",
+			contentPath: "./testdata/hotmail-1.txt",
+			wantErr:     false,
+		},
+		// todo: not pass yet: b
+		{
+			name:        "tutanota-2",
+			contentPath: "./testdata/tutanota-2.txt",
 			wantErr:     false,
 		},
 	}
@@ -59,13 +86,13 @@ func TestNewVerifier(t *testing.T) {
 				t.Errorf("failed to get verifier")
 				return
 			}
-			sigs, err := v.Validate(context.Background(), bytes.NewReader(content), time.Now())
+			sigs, err := v.Verify(context.Background(), bytes.NewReader(content), time.Now())
 			if err != nil {
 				t.Errorf("failed to validate signatures")
 				return
 			}
 			for _, sig := range sigs {
-				fmt.Println(sig.Status)
+				fmt.Println(sig.Status == "")
 				fmt.Println(sig.Reason)
 			}
 		})

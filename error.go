@@ -22,15 +22,27 @@ func NewSyntaxError(err error) *DError {
 	}
 }
 
+func NewSignError(msg string) *DError {
+	return &DError{status: StatusSignFail, message: msg}
+}
+
 func WrapError(err error, status Status, message string) *DError {
 	return &DError{status: status, message: message, internal: err}
 }
 
 func (t *DError) Error() string {
+	var msg string
 	if t.internal != nil {
-		return fmt.Sprintf("dkim(%s): %s: %s", t.status, t.message, t.internal.Error())
+		msg = fmt.Sprintf("%s: %s", t.message, t.internal.Error())
+	} else {
+		msg = fmt.Sprintf("%s", t.message)
 	}
-	return fmt.Sprintf("dkim(%s): %s", t.status, t.message)
+	if t.status == StatusSignFail {
+		msg = "dkim: " + msg
+	} else {
+		msg = fmt.Sprintf("dkim(%s): ", t.status) + msg
+	}
+	return msg
 }
 
 func (t *DError) Unwrap() error {

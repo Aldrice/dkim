@@ -8,19 +8,32 @@ import (
 
 // todo: 联系原作者, 问问他关于此部分内容的态度
 
-var DefaultCanonicalizeAlgorithm = map[string]CanonicalizeAlgorithm{
-	"simple":  new(simpleCanonicalizeAlgorithm),
-	"relaxed": new(relaxedCanonicalizeAlgorithm),
+var DefaultCanonicalizeAlgorithm = func() map[string]CanonicalizeAlgorithm {
+	m := map[string]CanonicalizeAlgorithm{}
+	for _, ca := range defaultCanonicalizationList {
+		m[ca.Name()] = ca
+	}
+	return m
+}()
+
+var defaultCanonicalizationList = []CanonicalizeAlgorithm{
+	new(simpleCanonicalizeAlgorithm),
+	new(relaxedCanonicalizeAlgorithm),
 }
 
 // A CanonicalizeAlgorithm contains 2 parts which processing header or body part
 // ref: https://datatracker.ietf.org/doc/html/rfc6376#section-3.4
 type CanonicalizeAlgorithm interface {
+	Name() string
 	CanonicalizeHeader(s string) string
 	CanonicalizeBody(w io.Writer) io.WriteCloser
 }
 
 type simpleCanonicalizeAlgorithm struct{}
+
+func (sa simpleCanonicalizeAlgorithm) Name() string {
+	return "simple"
+}
 
 // CanonicalizeHeader used to canonicalize the header content
 // simple canonicalize algorithm will not change header content in any way
@@ -85,33 +98,19 @@ func (sa simpleCanonicalizeAlgorithm) CanonicalizeBody(w io.Writer) io.WriteClos
 
 type relaxedCanonicalizeAlgorithm struct{}
 
+func (r relaxedCanonicalizeAlgorithm) Name() string {
+	return "relaxed"
+}
+
 // CanonicalizeHeader used to canonicalize the header content
 // relaxed canonicalize algorithm will convert the content with 5 steps in a specific order
 // ref: https://datatracker.ietf.org/doc/html/rfc6376#section-3.4.2
 func (r relaxedCanonicalizeAlgorithm) CanonicalizeHeader(s string) string {
 	kv := strings.SplitN(s, ":", 2)
-
 	k := strings.TrimSpace(strings.ToLower(kv[0]))
-
-	var v string
-	if len(kv) > 1 {
-		v = kv[1]
-	}
-	lines := strings.Split(v, CRLF)
-	lines[0] = strings.TrimLeft(lines[0], " \t")
-
-	v = ""
-	for _, l := range lines {
-		if len(l) == 0 {
-			break
-		}
-
-		if l[0] == ' ' || l[0] == '\t' {
-			v += " "
-		}
-		v += strings.Trim(l, " \t")
-	}
-
+	v := strings.ReplaceAll(kv[1], "\n", "")
+	v = strings.ReplaceAll(v, "\r", "")
+	v = strings.TrimSpace(RemoveWS(v))
 	return k + ":" + v + CRLF
 }
 

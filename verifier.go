@@ -18,7 +18,6 @@ import (
 	"time"
 )
 
-const verifierPrefix = "DKIM"
 const defaultDKIMTimeout = time.Second * 10
 
 type Message struct {
@@ -26,9 +25,10 @@ type Message struct {
 	content     *bufio.Reader
 	headersMap  HeaderMap
 	signatures  []*Signature
+	context     context.Context
 }
 
-func NewMessage(v *Verifier, r io.Reader, rt time.Time) (*Message, error) {
+func (v *Verifier) NewMessage(ctx context.Context, r io.Reader, rt time.Time) (*Message, error) {
 	br := bufio.NewReader(r)
 	hm, err := AbstractHeader(br)
 	if err != nil {
@@ -39,14 +39,14 @@ func NewMessage(v *Verifier, r io.Reader, rt time.Time) (*Message, error) {
 		receiveTime: rt,
 		content:     br,
 		headersMap:  hm,
+		context:     ctx,
 	}
 
 	sigs, ok := m.headersMap[strings.ToLower(SignatureKey)]
 	if len(sigs) > 0 {
-		m.signatures = make([]*Signature, len(sigs))
 		if ok {
-			for i, h := range sigs {
-				m.signatures[i] = NewSignature(h).SetVerifier(v).SetMessage(m)
+			for _, h := range sigs {
+				v.NewSignature(h).SetMessage(m)
 			}
 		}
 	} else {
@@ -56,18 +56,50 @@ func NewMessage(v *Verifier, r io.Reader, rt time.Time) (*Message, error) {
 	return m, nil
 }
 
+func (s *Signer) NewMessage(ctx context.Context, r io.Reader) (*Message, error) {
+	br := bufio.NewReader(r)
+	hm, err := AbstractHeader(br)
+	if err != nil {
+		return nil, err
+	}
+
+	m := &Message{
+		content:    br,
+		headersMap: hm,
+		context:    ctx,
+	}
+
+	return m, nil
+}
+
+func (m *Message) addSignature(s *Signature) {
+	if s.message != nil {
+		s.message.removeSignature(s)
+	}
+	m.signatures = append(m.signatures, s)
+	s.message = m
+}
+
+func (m *Message) removeSignature(s *Signature) bool {
+	for i, sig := range m.signatures {
+		if strings.EqualFold(sig.Raw, s.Raw) {
+			m.signatures = append(m.signatures[:i], m.signatures[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 func NewVerifier() (*Verifier, error) {
 	return &Verifier{
-		hashMap:         algorithm.DefaultHashMap,
-		encryptionMap:   algorithm.DefaultEncryptionMap,
-		canonicalizeMap: algorithm.DefaultCanonicalizeAlgorithm,
-		fetcher:         query.NewPublicKeyFetcher(verifierPrefix + version),
+		hashMap:          algorithm.DefaultHashMap,
+		encryptionMap:    algorithm.DefaultEncryptionMap,
+		canonicalizeMap:  algorithm.DefaultCanonicalizeAlgorithm,
+		publicKeyFetcher: query.NewPublicKeyFetcher(prefix + version),
+		tagHandlerList:   defaultTagHandlerList,
 
-		ctx:     context.TODO(),
 		version: version,
 		timeout: defaultDKIMTimeout,
-
-		tagVerifiersList: defaultTagExtractorList,
 	}, nil
 }
 
@@ -79,14 +111,13 @@ type Verifier struct {
 	encryptionMap   map[string]algorithm.EncryptAlgorithm
 	canonicalizeMap map[string]algorithm.CanonicalizeAlgorithm
 
+	// verifier component
+	tagHandlerList   []TagHandler
+	publicKeyFetcher *query.PublicKeyFetcher
+
 	// verifier setting
-	ctx     context.Context
 	version string
 	timeout time.Duration
-
-	// verifier component
-	tagVerifiersList []TagExtractor
-	fetcher          *query.PublicKeyFetcher
 
 	/*
 		todo:
@@ -102,18 +133,16 @@ func (v *Verifier) SetTimeout(t time.Duration) {
 }
 
 func (v *Verifier) SetResolver(r *net.Resolver) {
-	v.fetcher.SetResolver(r)
+	v.publicKeyFetcher.SetResolver(r)
 }
 
-// Validate used to validate a message with the specific verifier
+// Verify used to validate a message with the specific verifier
 // ctx is the working context, r is the body of email
 // rt is the receiving time of email which used to compare "x=" tag value in DKIM signature
-func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*Signature, error) {
+func (v *Verifier) Verify(ctx context.Context, r io.Reader, rt time.Time) ([]*Signature, error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout)
-	v.ctx = ctx
 	defer cancel()
-
-	msg, err := NewMessage(v, r, rt)
+	msg, err := v.NewMessage(ctx, r, rt)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +164,7 @@ func (v *Verifier) Validate(ctx context.Context, r io.Reader, rt time.Time) ([]*
 		if err != nil {
 			tErr := err.(*DError)
 			s.Status = tErr.status
-			s.Reason = tErr.message
+			s.Reason = tErr.Error()
 			if s.Status == StatusPermFail {
 				continue
 			}
@@ -150,7 +179,7 @@ const (
 )
 
 func (v *Verifier) extractTags(s *Signature) error {
-	for _, vfr := range v.tagVerifiersList {
+	for _, vfr := range v.tagHandlerList {
 		t, ok := s.GetTagMap()[vfr.Name()]
 		if !ok {
 			if vfr.IsRequired(s) {
@@ -175,7 +204,7 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 	var tempErr error
 	for _, qm := range s.QueryMethod {
 		items := strings.SplitN(qm, "/", 2)
-		qt, ok := v.fetcher.GetTypeMap()[items[0]]
+		qt, ok := v.publicKeyFetcher.GetTypeMap()[items[0]]
 		if !ok {
 			continue
 		} else {
@@ -184,25 +213,21 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 				option = items[1]
 			}
 			target := &net.DNSError{}
-			ks, err = qt.QueryPublicKey(v.ctx, option, s.Domain, s.Selector)
+			ks, err = qt.QueryPublicKey(s.message.context, option, s.Domain, s.Selector)
 			if err == nil {
 				for _, k := range ks {
-					temp, err2 := v.fetcher.ExtractTxtRecord(s.HashAlgorithm.Name(), s.EncryptAlgorithm.Name(), k)
+					temp, err2 := v.publicKeyFetcher.ExtractTxtRecord(s.HashAlgorithm.Name(), s.EncryptAlgorithm.Name(), k)
 					if err2 == nil {
 						b, err3 := base64.StdEncoding.DecodeString(temp)
 						if err3 != nil {
 							continue
 						}
-						ea, err3 := s.EncryptAlgorithm.NewEncryptionVerifier(b)
-						if err3 != nil {
-							continue
-						}
+						s.PublicKey = b
 						tempErr = nil
-						s.EncryptAlgorithm = ea
 						break
 					}
 				}
-				if !s.EncryptAlgorithm.IsEmpty() {
+				if s.PublicKey != nil {
 					break
 				}
 			} else if errors.As(err, &target) {
@@ -215,7 +240,7 @@ func (v *Verifier) getPublicKey(s *Signature) (err error) {
 	if tempErr != nil {
 		return WrapError(tempErr, StatusTempFail, "key unavailable")
 	}
-	if s.EncryptAlgorithm.IsEmpty() {
+	if s.PublicKey == nil {
 		return NewDkimError(StatusPermFail, "no key for signature")
 	}
 	return
@@ -232,7 +257,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	if s.BodyLength != nil {
 		w = &algorithm.LimitedWriter{W: w, N: s.BodyLength.Int64()}
 	}
-	wc := s.BodyCType.CanonicalizeBody(w)
+	wc := s.BodyCanonicalization.CanonicalizeBody(w)
 	if _, err := io.Copy(wc, s.message.content); err != nil {
 		return WrapError(err, StatusPermFail, "an exception occurred when input the content")
 	}
@@ -250,13 +275,13 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	// compute the hash and validate the signature
 	// todo: 有设计方面的错误
 	hr.Reset()
-	for _, h := range s.DeclaredHeaders {
+	for _, h := range s.SignedHeaders {
 		h, ok := s.message.headersMap[strings.ToLower(h)]
 		if !ok {
 			continue
 		}
 		for _, item := range h {
-			_, err := hr.Write([]byte(s.HeaderCType.CanonicalizeHeader(item.Raw)))
+			_, err := hr.Write([]byte(s.HeaderCanonicalization.CanonicalizeHeader(item.Raw)))
 			if err != nil {
 				return WrapError(err, StatusPermFail, "failed to write canonicalize header into hash")
 			}
@@ -266,7 +291,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 	// todo: find the relative definition in the rfc document
 	// remove signature encryption cipher in the 'b=' tag of signature header
 	// than press it into queue prepare for compute
-	sf := s.BodyCType.CanonicalizeHeader(removeCipher(s.raw))
+	sf := s.BodyCanonicalization.CanonicalizeHeader(removeCipher(s.Raw))
 	sf = strings.TrimRight(sf, CRLF)
 	if _, err := hr.Write([]byte(sf)); err != nil {
 		return WrapError(err, StatusPermFail, "failed to write canonicalize signature field into hash")
@@ -277,7 +302,7 @@ func (v *Verifier) computeSignature(s *Signature) error {
 		return WrapError(err, StatusPermFail, "failed to decode body cipher from base64 format")
 	}
 
-	if err := s.EncryptAlgorithm.Verify(bc, hr.Sum(nil), hash); err != nil {
+	if err := s.EncryptAlgorithm.Decrypt(s.PublicKey, bc, hr.Sum(nil), hash); err != nil {
 		return WrapError(err, StatusPermFail, "signature did not verify")
 	}
 

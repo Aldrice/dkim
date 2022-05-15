@@ -22,6 +22,7 @@ type Header struct {
 }
 
 func AbstractHeader(r *bufio.Reader) (HeaderMap, error) {
+	// todo: 可能需要检查from是否存在
 	tr := textproto.NewReader(r)
 
 	var hs []string
@@ -76,4 +77,8 @@ func FixCRLF(b []byte) []byte {
 		res = append(res, b[i])
 	}
 	return res
+}
+
+func RemoveWS(s string) string {
+	return regexp.MustCompile(`[ \t]+`).ReplaceAllString(s, " ")
 }
